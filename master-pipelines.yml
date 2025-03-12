@@ -1,0 +1,202 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  ORG_NAME: "Your Org Name"
+  PROJECT_NAME: "Your Porj Name"
+  AZURE_DEVOPS_URL: "https://dev.azure.com/$ORG_NAME/$PROJECT_NAME/_apis/git/repositories?api-version=7.1"
+  PAT: "YOUR PAT TOKEN"
+  REPO_NAME: $(REPO_NAME_)
+  PIPELINE_NAME: $REPO_NAME-CI-CD
+  TEMPLATE_PATH: "config/pipeline_template.yml"
+
+steps:
+- script: echo Hello, world!
+  displayName: 'BASH GOES HERE'
+
+- script: |
+    PAT="YOUR PAT"
+    JSON_PAYLOAD=$(cat <<EOF
+    {
+      "name": "$REPO_NAME"
+    }
+    EOF
+    )
+
+    # Create repository using Azure DevOps REST API
+    RESPONSE=$(curl -s -X POST -u ":$PAT" \
+        -H "Content-Type: application/json" \
+        -d "$JSON_PAYLOAD" \
+        "https://dev.azure.com/$ORG_NAME/$PROJECT_NAME/_apis/git/repositories?api-version=7.1-preview.1")
+    
+    echo $RESPONSE
+
+    REPO_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*' | cut -d'"' -f4)
+    echo $REPO_ID
+    
+    FIRST_PART=$(echo "$REPO_ID" | head -n1)
+
+
+    echo "$FIRST_PART"
+    
+
+    BRANCH_PAYLOAD=$(cat <<EOF
+    {
+      "refUpdates": [
+        {
+          "name": "refs/heads/dev",
+          "oldObjectId": "0000000000000000000000000000000000000000"
+        }
+      ],
+      "commits": [
+        {
+          "comment": "Added task markdown file.",
+          "changes": [
+            {
+              "changeType": "add",
+              "item": {
+                "path": "/tasks.md"
+              },
+              "newContent": {
+                "content": "# Tasks\n\n* Item 1\n* Item 2",
+                "contentType": "rawtext"
+              }
+            }
+          ]
+        }
+      ]
+    }
+    EOF
+    )
+
+    # Create repository using Azure DevOps REST API
+    BRANCH_RESPONSE=$(curl -s -X POST -u ":$PAT" \
+        -H "Content-Type: application/json" \
+        -d "$BRANCH_PAYLOAD" \
+        "https://dev.azure.com/$ORG_NAME/_apis/git/repositories/$FIRST_PART/pushes?api-version=7.1")
+    
+    echo $BRANCH_RESPONSE
+
+    # Push Templates and other files 
+    SOURCE_REPO_NAME="SOURCE FOLDER NAME"  # Repo containing the templates
+    TARGET_REPO_NAME="$REPO_NAME"  # Repo where templates will be copied
+    TARGET_BRANCH="dev"             # Branch to push files
+    TEMP_DIR=$(mktemp -d)
+        echo "📁 Created temporary directory: $TEMP_DIR"
+
+        # Function to clean up the temporary directory on exit
+        cleanup() {
+            echo " Cleaning up temporary files..."
+            rm -rf "$TEMP_DIR"
+            echo " Cleanup completed."
+        }
+        trap cleanup EXIT  # Cleanup runs automatically when script exits
+        # Clone source repo
+        echo "Cloning source repository..."
+        git clone --depth=1 "https://$PAT@dev.azure.com/$ORG_NAME/$PROJECT_NAME/_git/$SOURCE_REPO_NAME" "$TEMP_DIR/source" || { echo " Failed to clone source repo"; exit 1; }
+        # Clone target repo
+        echo " Cloning target repository..."
+        git clone "https://$PAT@dev.azure.com/$ORG_NAME/$PROJECT_NAME_git/$TARGET_REPO_NAME" "$TEMP_DIR/target" || { echo "Failed to clone target repo"; exit 1; }
+        # Change directory to target repo
+        cd "$TEMP_DIR/target" || exit 1
+        # Checkout target branch
+        git checkout "$TARGET_BRANCH" || git checkout -b "$TARGET_BRANCH"
+        # Copy files from source repo to target repo (excluding .git folder)
+        echo " Copying files from source to target..."
+        rsync -av --exclude='.git' "$TEMP_DIR/source/" "$TEMP_DIR/target/"
+        # Check for changes
+        git config --local user.email "USERNAME@MAIL.com" #GIT MAIL ID
+        git config --local user.name "USERNAME" #GIT USER NAME
+        #Add, commit, and push changes
+        git add --all
+        git commit -m "Synced files from $SOURCE_REPO_NAME to $TARGET_REPO_NAME"
+        git push origin "$TARGET_BRANCH" || { echo " Failed to push changes"; exit 1; }
+        echo " Changes pushed successfully to '$TARGET_BRANCH'."
+
+    #varibale group creation
+
+    VARIABLE_PAYLOAD=$(cat <<EOF
+      {
+      "variables": {
+        "ConnectionString": {
+          "value": "YourConnectionString",
+          "isSecret": true
+        },
+        "APIKey": {
+          "value": "YourAPIKey",
+          "isSecret": true
+        },
+        "Environment": {
+          "value": "Production"
+        }
+      },
+      "variableGroupProjectReferences": [
+        {
+          "name": "$REPO_NAME",
+          "projectReference": {
+            "id": "kmadej",
+            "name": "kmadej"
+          }
+        }
+      ],
+      "name": "$REPO_NAME",
+      "description": "Description of your variable group"
+    }
+    EOF
+      )
+    curl -X POST -u ":$PAT" \
+      -H "Content-Type: application/json" \
+      -d "$VARIABLE_PAYLOAD" \
+      "https://dev.azure.com/$ORG_NAME/$PROJECT_NAME/_apis/distributedtask/variablegroups?api-version=7.1-preview.1"
+    
+    echo "pipeline creation"
+
+    #pipeline automation
+    echo "DEBUG: REPO_ID = '$REPO_ID'"
+    echo "DEBUG: REPO_NAME = '$REPO_NAME'"
+
+    # Construct JSON Payload (Remove newlines)
+    PIPELINE_PAYLOAD=$(cat <<EOF | tr -d '\n'
+    {
+      "folder": null,
+      "name": "$REPO_NAME",
+      "configuration": {
+        "type": "yaml",
+        "path": "/azure-pipelines.yml",
+        "repository": {
+          "id": "$FIRST_PART",
+          "name": "$REPO_NAME",
+          "type": "azureReposGit"
+        }
+      }
+    }
+    EOF
+    )
+
+    # Debug: Print JSON Payload
+    echo "DEBUG: Pipeline Payload = $PIPELINE_PAYLOAD"
+
+    # Call Azure DevOps REST API
+    PIPELINE_RESPONSE=$(curl -s -X POST -u ":$PAT" \
+        -H "Content-Type: application/json" \
+        -d "$PIPELINE_PAYLOAD" \
+        "https://dev.azure.com/$ORG_NAME/$PROJECT_NAME/_apis/pipelines?api-version=7.1")
+
+    # Debug: Print API Response
+    echo "DEBUG: API Response = $PIPELINE_RESPONSE"
+
+    # Check Response
+    if echo "$PIPELINE_RESPONSE" | grep -q '"id":'; then
+        echo " Pipeline '$REPO_NAME' created successfully!"
+    else
+        echo " Failed to create pipeline"
+        echo "Response: $PIPELINE_RESPONSE"
+    fi
