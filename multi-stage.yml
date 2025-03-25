@@ -1,0 +1,62 @@
+trigger:
+  branches:
+    include:
+      - dev  # Runs full pipeline when code merges into dev branch
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: PR_Validation
+    displayName: "PR Validation"
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    jobs:
+      - job: SonarQube_Analysis
+        displayName: "Run SonarQube Analysis"
+        steps:
+          - script: echo SonarQube Analysis!
+            displayName: 'Run SonarQube Analysis'
+
+      - job: Unit_Tests
+        displayName: "Run Unit Tests"
+        dependsOn: SonarQube_Analysis  # Ensures Unit_Tests runs after SonarQube_Analysis
+        steps:
+          - script: |
+              echo "Running Unit Tests..."
+              # Add unit test command here
+            displayName: "Run Tests"
+
+  - stage: Full_Pipeline
+    displayName: "Build and Deploy"
+    condition: not(eq(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: SonarQube_Analysis
+        displayName: "Run SonarQube Analysis"
+        steps:
+          - script: |
+              echo "Running Complete SonarQube Analysis..."
+            displayName: "Run SonarQube Analysis Full"
+
+      - job: Unit_Tests
+        displayName: "Run Unit Tests"
+        dependsOn: SonarQube_Analysis  # Ensures Unit_Tests runs after SonarQube_Analysis
+        steps:
+          - script: |
+              echo "Running Complete Unit Tests..."
+            displayName: "Run Tests Full"
+
+      - job: Build
+        displayName: "Build Application"
+        dependsOn: Unit_Tests  # Ensures Build runs after Unit_Tests
+        steps:
+          - script: |
+              echo "Building Application..."
+            displayName: "Build"
+
+      - job: Deploy
+        displayName: "Deploy Application"
+        dependsOn: Build  # Ensures Deploy runs after Build
+        steps:
+          - script: |
+              echo "Deploying Application..."
+            displayName: "Deploy"
